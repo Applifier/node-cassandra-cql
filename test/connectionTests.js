@@ -10,7 +10,7 @@ var helper = require('./testHelper.js');
 var keyspace = 'unittestkp1_1';
 var config = require('./config.js');
 
-types.consistencies.getDefault = function () {return this.one};
+types.consistencies.getDefault = function () {return this.quorum};
 
 var con = new Connection(utils.extend({}, config, {maxRequests: 32}));
 

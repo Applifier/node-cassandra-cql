@@ -18,7 +18,9 @@ var optionsDefault = {
   //maximum time (in milliseconds) to get a healthy connection from the pool. It should be connection Timeout * n.
   getAConnectionTimeout: 3500,
   //number of connections to open for each host
-  poolSize: 1
+  poolSize: 1,
+  //Latency limit in milliseconds when connection is still good.
+  latencyLimit: 100
 };
 //Represents a pool of connection to multiple hosts
 function Client(options) {
@@ -132,14 +134,17 @@ Client.prototype._getAConnection = function (callback) {
     //go through the connections
     //watch out for infinite loops
     var startTime = Date.now();
-    function checkNextConnection (callback) {
-      self.emit('log', 'info', 'Checking next connection');
+    function checkNextConnection (iteration, callback) {
+      self.emit('log', 'info', 'Checking next connection on iteration ' + iteration);
       self.connectionIndex = self.connectionIndex + 1;
       if (self.connectionIndex > self.connections.length-1) {
         self.connectionIndex = 0;
       }
       var c = self.connections[self.connectionIndex];
-      if (self._isHealthy(c)) {
+      if (self._isHealthy(c) && c.getAverageLatency() < self.options.latencyLimit) {
+        callback(null, c);
+      }
+      else if (self._isHealthy(c) && iteration >= self.connections.length) {
         callback(null, c);
       }
       else if (Date.now() - startTime > self.options.getAConnectionTimeout) {
@@ -153,7 +158,7 @@ Client.prototype._getAConnection = function (callback) {
             //This connection is still not good, go for the next one
             self._setUnhealthy(c);
             setImmediate(function() {
-              checkNextConnection(callback);
+              checkNextConnection(iteration + 1, callback);
             });
           }
           else {
@@ -166,12 +171,25 @@ Client.prototype._getAConnection = function (callback) {
       else {
         //this connection is not good, try the next one
         setImmediate(function() {
-          checkNextConnection(callback);
+          checkNextConnection(iteration + 1, callback);
         });
       }
     }
-    checkNextConnection(callback);
+    checkNextConnection(0, callback);
   });
+};
+
+/**
+ * Returns a map from connection host to average connection latency. Can be used to monitor
+ * connection latencies.
+ */
+Client.prototype.getConnectionLatencies = function() {
+  var latencies = {};
+  for (var i = 0; i < this.connections.length; i++) {
+    latencies[this.connections[i].options.host + ":" + this.connections[i].options.port] = this.connections[i].getAverageLatency();
+  }
+
+  return latencies;
 };
 
 /**
@@ -547,6 +565,7 @@ Client.prototype._setUnhealthy = function (connection) {
   if (!connection.unhealthyAt) {
     this.emit('log', 'error', 'Connection #' + connection.indexInPool + ' is being set to Unhealthy');
     connection.unhealthyAt = new Date().getTime();
+    connection.resetLatencyHistory();
     this._removeAllPrepared(connection);
   }
 };

@@ -8,7 +8,7 @@ var types = require('../lib/types.js');
 var config = require('./config.js');
 var helper = require('./testHelper.js');
 var keyspace = 'unittestkp1_2';
-types.consistencies.getDefault = function () { return this.one; };
+types.consistencies.getDefault = function () { return this.quorum; };
 
 var client = null;
 var clientOptions = {
@@ -100,7 +100,74 @@ describe('Client', function () {
       });
     });
   });
-  
+
+  describe("#_getAConnection()", function () {
+    it("should skip connection if its latency is too big", function (done) {
+      var localClient = getANewClient();
+      assert.ok(localClient.connections.length > 1, 'There should be more than 1 connection to test latency skip');
+      var iterationOrder = [];
+      localClient.connections[0].getAverageLatency = function() {
+        iterationOrder.push("#0");
+        return 10;
+      };
+      localClient.connections[1].getAverageLatency = function() {
+        iterationOrder.push("#1");
+        return 10000;
+      };
+      localClient.connections[0]._id = 0;
+      localClient.connections[1]._id = 1;
+
+      localClient._getAConnection(function (err, c) {
+        assert.ifError(err);
+        assert.equal(iterationOrder[0], "#1"); // it first should check connection #1, which is not good because of latency
+        assert.equal(iterationOrder[1], "#0"); // but connection #0 is good
+        assert.equal(c._id, 0); // must not be connection[0] because it has too big latency limit
+        done();
+      });
+    });
+
+    it("should return some connection even if every connection latency is too big", function (done) {
+      var localClient = getANewClient();
+      assert.ok(localClient.connections.length > 1, 'There should be more than 1 connection to test latency skip');
+      var iterationOrder = [];
+      localClient.connections[0].getAverageLatency = function() {
+        iterationOrder.push("#0");
+        return 10;
+      };
+      localClient.connections[1].getAverageLatency = function() {
+        iterationOrder.push("#1");
+        return 10000;
+      };
+      localClient.connections[0]._id = 0;
+      localClient.connections[1]._id = 1;
+
+      localClient._getAConnection(function (err, c) {
+        assert.ifError(err);
+        assert.equal(iterationOrder[0], "#1"); // it first should check connection #1, which is not good because of latency
+        assert.equal(iterationOrder[1], "#0"); // then it checks connection #0 which is also not good because of latency
+        assert.equal(iterationOrder[0], "#1"); // After iterating thru all it comes back to #1 which is now accepted
+        assert.ok(c);
+        done();
+      });
+    });
+  });
+
+  describe("#getConnectionLatencies()", function () {
+    it("should return map of connection latencies", function () {
+      var localClient = getANewClient();
+      localClient.connections[0].getAverageLatency = function() {
+        return 10;
+      };
+      localClient.connections[1].getAverageLatency = function() {
+        return 10000;
+      };
+
+      var latencies = localClient.getConnectionLatencies();
+      assert.equal(latencies[localClient.connections[0].options.host + ":" + localClient.connections[0].options.port], 10);
+      assert.equal(latencies[localClient.connections[1].options.host + ":" + localClient.connections[1].options.port], 10000);
+    });
+  });
+
   describe('#execute()', function () {
     it('should allow different argument lengths', function (done) {
       async.series([
@@ -322,7 +389,7 @@ describe('Client', function () {
           done()
       });
     });
-    
+
     it('should failover to other nodes and reconnect', function (done) {
       this.timeout(10000);
       //the client must reconnect and continue
@@ -400,6 +467,7 @@ describe('Client', function () {
         done();
       });
     });
+
   });
 
   describe('#executeBatch()', function () {
