@@ -143,12 +143,17 @@ Client.prototype._getAConnection = function (callback) {
       var c = self.connections[self.connectionIndex];
       if (self._isHealthy(c) && c.getAverageLatency() < self.options.latencyLimit) {
         callback(null, c);
+        return;
       }
+
+      // Accept any healthy connection regardless of latency if all connections have been checked at least once
       else if (self._isHealthy(c) && iteration >= self.connections.length) {
         callback(null, c);
+        return;
       }
-      else if (Date.now() - startTime > self.options.getAConnectionTimeout) {
-        callback(new types.TimeoutError('Get a connection timed out'));
+      else if (Date.now() - startTime > (self.options.getAConnectionTimeout)) {
+        callback(new types.TimeoutError('Get a connection timed out of ' + self.options.getAConnectionTimeout + " ms"));
+        return;
       }
       else if (!c.connecting && self._canReconnect(c)) {
         self.emit('log', 'info', 'Retrying to open #' + c.indexInPool);
@@ -157,22 +162,27 @@ Client.prototype._getAConnection = function (callback) {
           if (err) {
             //This connection is still not good, go for the next one
             self._setUnhealthy(c);
-            setImmediate(function() {
-              checkNextConnection(iteration + 1, callback);
-            });
           }
           else {
             //this connection is now good
             self._setHealthy(c);
-            callback(null, c);
           }
+
+          // Let the reconnection go in the background so no return here.
         });
       }
-      else {
-        //this connection is not good, try the next one
+
+      if (iteration < self.connections.length) {
+        // Try next connection immediately because we haven't yet checked all connections at least once
         setImmediate(function() {
           checkNextConnection(iteration + 1, callback);
         });
+      } else {
+        // Delay the execution if we have previously tried all connections and they are all invalid.
+        // This gives the cluster time to correct itself
+        setTimeout(function() {
+          checkNextConnection(iteration + 1, callback);
+        }, self.options.staleTime);
       }
     }
     checkNextConnection(0, callback);
@@ -186,7 +196,11 @@ Client.prototype._getAConnection = function (callback) {
 Client.prototype.getConnectionLatencies = function() {
   var latencies = {};
   for (var i = 0; i < this.connections.length; i++) {
-    latencies[this.connections[i].options.host + ":" + this.connections[i].options.port] = this.connections[i].getAverageLatency();
+    latencies[i] = {
+      latency : this.connections[i].getAverageLatency(),
+      host : this.connections[i].options.host,
+      port : this.connections[i].options.port
+    };
   }
 
   return latencies;
@@ -497,6 +511,7 @@ Client.prototype._getPrepared = function (query, callback) {
   var self = this;
   this._getAConnection(function(err, con) {
     if (err) {
+      console.log("err on _getAConnection", err, err.stack);
       return callback(err);
     }
     var conInfo = preparedInfo.getConnectionInfo(con.indexInPool);
@@ -562,6 +577,11 @@ Client.prototype._isServerUnhealthy = function (err) {
 };
 
 Client.prototype._setUnhealthy = function (connection) {
+  if (!connection) {
+    var e = new Error("connection was undefined");
+    console.error(e);
+    console.error(e.stack);
+  }
   if (!connection.unhealthyAt) {
     this.emit('log', 'error', 'Connection #' + connection.indexInPool + ' is being set to Unhealthy');
     connection.unhealthyAt = new Date().getTime();

@@ -8,7 +8,7 @@ var types = require('../lib/types.js');
 var config = require('./config.js');
 var helper = require('./testHelper.js');
 var keyspace = 'unittestkp1_2';
-types.consistencies.getDefault = function () { return this.quorum; };
+types.consistencies.getDefault = function () { return this.one; };
 
 var client = null;
 var clientOptions = {
@@ -31,7 +31,7 @@ describe('Client', function () {
       con.open(function (err) {
         if (err) throw err;
         else {
-          var query = util.format("DROP KEYSPACE %s;", keyspace)
+          var query = util.format("DROP KEYSPACE %s;", keyspace);
           con.execute(query, function () {
             createKeyspace(con, callback);
           });
@@ -163,8 +163,12 @@ describe('Client', function () {
       };
 
       var latencies = localClient.getConnectionLatencies();
-      assert.equal(latencies[localClient.connections[0].options.host + ":" + localClient.connections[0].options.port], 10);
-      assert.equal(latencies[localClient.connections[1].options.host + ":" + localClient.connections[1].options.port], 10000);
+      assert.equal(latencies[0].latency, 10);
+      assert.equal(latencies[1].latency, 10000);
+      assert.equal(latencies[0].host, localClient.connections[0].options.host);
+      assert.equal(latencies[0].port, localClient.connections[0].options.port);
+      assert.equal(latencies[1].host, localClient.connections[1].options.host);
+      assert.equal(latencies[1].port, localClient.connections[1].options.port);
     });
   });
 
@@ -220,13 +224,13 @@ describe('Client', function () {
       var localClient = getANewClient();
       //Only 1 retry
       localClient.options.maxExecuteRetries = 1;
-      localClient.options.getAConnectionTimeout = 300;
+      localClient.options.getAConnectionTimeout = 3000;
       //Change the behaviour so every err is a "server error"
       localClient._isServerUnhealthy = function (err) {
         return true;
       };
 
-      localClient.execute('WILL FAIL AND EXECUTE THE METHOD FROM ABOVE', function (err, result, retryCount){
+      localClient.execute('WILL FAIL AND EXECUTE THE METHOD FROM ABOVE', function (err, result, retryCount) {
         assert.ok(err, 'The execution must fail');
         assert.equal(retryCount, localClient.options.maxExecuteRetries, 'It must retry executing the times specified ' + retryCount);
         localClient.shutdown(done);
